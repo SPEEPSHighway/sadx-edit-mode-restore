@@ -17,6 +17,11 @@ Uint16 objEntryID;
 Sint16 ssCurrentSubAction;
 Sint16 dispFlag;
 
+Bool hasADWV;
+
+//Using objStatusEntry as a pointer to account for AD WV.
+OBJ_CONDITION* pObjStatusEntry = &objStatusEntry;
+
 Bool boolEditorEnabled = 1;
 
 Float moveSpd = 1.0f;
@@ -36,6 +41,9 @@ Float incVal_f = 1.0f;
 Sint32 incVal_i = 0x10;
 Sint32 incID_F = 1;
 Sint32 incID_I = 2;
+
+Uint32 numEditEntry_temp;
+_OBJ_EDITENTRY __objEditEntry_temp[1024];
 
 enum ActEnum {
 	ACT_PLACE,
@@ -135,12 +143,12 @@ static void setEditor_Begin(taskwk* twp)
 /// <param name="zscl">Z Scl</param>
 static void setEditor_setEditEntry(Float xpos, Float ypos, Float zpos, Sint16 rotx, Sint16 roty, Sint16 rotz, Float xscl, Float yscl, Float zscl)
 {
-	OBJ_CONDITION* objEntry = &objStatusEntry[numStatusEntry];
+	OBJ_CONDITION* objEntry = &pObjStatusEntry[numStatusEntry];
 	if (objEntry) {
 		objEntry->ssCondition = (Sint16)0x8000;
 		objEntry->scCount = 0;
 		objEntry->scUserFlag = 0;
-		_OBJ_EDITENTRY* objEditEntry = &___objEditEntry[*pNumEditEntry]; //This might be overwriting stuff and causing crashes. Don't know a way around it though.
+		_OBJ_EDITENTRY* objEditEntry = &___objEditEntry[*pNumEditEntry];
 		objEntry->pObjEditEntry = objEditEntry;
 		if (boolCommonSet == 0) {
 			objEditEntry->usID = objEntryID | 0x8000;
@@ -183,15 +191,19 @@ static Float njDistanceP2P_se(NJS_POINT3* p1, NJS_POINT3* p2)
 /// <param name="twp">Editor's taskwk</param>
 static void setEditor_setOCP(taskwk* twp)
 {
+	//Added. Prevent crash when mods change this address.
+	if (!pObjStatusEntry[0].pObjEditEntry)
+		return;
+
 	Float max_dist = 200.0f;
-	OBJ_CONDITION* ocp = &objStatusEntry[0];
+	OBJ_CONDITION* ocp = &pObjStatusEntry[0];
 
 	for (Sint32 i = 0; i < numStatusEntry; ++i) {
-		_OBJ_EDITENTRY* pObjEditEntry = objStatusEntry[i].pObjEditEntry;
+		_OBJ_EDITENTRY* pObjEditEntry = pObjStatusEntry[i].pObjEditEntry;
 		if (!(pObjItemTable->pObjItemEntry[pObjEditEntry->usID & 0xFFF].ssAttribute & 8)) {
 			Float distY = njDistanceP2P_se((NJS_POINT3*)&pObjEditEntry->xpos, &twp->pos);
 			if (distY < max_dist) {
-				ocp = &objStatusEntry[i];
+				ocp = &pObjStatusEntry[i];
 				max_dist = distY;
 			}
 		}
@@ -229,7 +241,7 @@ static void setEditor_setOCP(taskwk* twp)
 		twp->scl.y = pObjEditEntry->yscl;
 		twp->scl.z = pObjEditEntry->zscl;
 
-		OBJ_CONDITION* ocp2 = &objStatusEntry[--numStatusEntry];
+		OBJ_CONDITION* ocp2 = &pObjStatusEntry[--numStatusEntry];
 		ocp->scCount = ocp2->scCount;
 		ocp->scUserFlag = ocp2->scUserFlag;
 		ocp->ssCondition = ocp2->ssCondition;
@@ -301,12 +313,19 @@ static void njPrintH_FlashInt(Uint32* value, Sint32 x, Uint32 y, Sint32 inc_id)
 	}
 }
 
+
+
 /// <summary>
 /// Draws the text in the object editor.
 /// </summary>
 /// <param name="twp">Editor's taskwk</param>
 static void setEditor_DrawHUD(taskwk* twp)
 {
+	//Added limit check
+	if (numStatusEntry >= 1024 && !(hasADWV && GetStageNumber() == 0x200)) {
+		njPrintC(NJM_LOCATION(0, 8), "WARNING: Over 1024 objects! The game may behave unpredictably.");
+	}
+
 	njPrintC(NJM_LOCATION(0, 10), "ACT MODE:");
 	njPrintC(NJM_LOCATION(9, 10), actModeName[ssCurrentAction]);
 	njPrintC(NJM_LOCATION(0, 11), "SUB MODE:");
@@ -813,8 +832,13 @@ void setEditor(task* tp)
 		taskwk_setedit = taskwk_p;
 		tp->dest = setEditor_dest;
 		break;
-	case 1: //Wait for input to enter editor
-		if (per[0]->on & Buttons_X && per[0]->press & Buttons_A && setEditor_SetDisplayFlag(1)) {
+	case 1: //Wait for input to enter editor. boolEditorEnabled added.
+		//Doesn't work in Chao Gardens, so disable it there.
+		if (ssStageNumber >= 39 && ssStageNumber <= 41)
+			break;
+
+
+		if (per[0]->on & Buttons_X && per[0]->press & Buttons_A && setEditor_SetDisplayFlag(1) && boolEditorEnabled) {
 			taskwk_p->mode = 3;
 		}
 		break;
@@ -826,6 +850,20 @@ void setEditor(task* tp)
 		break;
 	case 4: //Editor running
 	{
+		/*Added. If this is empty then objStatusEntry may have been relocated (AutoDemo Windy Valley does this).
+		  Grab new address from one of its references.*/
+		if (objStatusEntry[0].pObjEditEntry == 0) {
+			Sint32 addr = 0x46B817;
+			pObjStatusEntry = *(OBJ_CONDITION**)addr;
+		}
+
+		//Added so objects can be spawned in areas without SET Files, like Chao Race and Hedgehog Hammer when not Amy.
+		if (!___objEditEntry && !pNumEditEntry) {
+			PrintDebug("\nSET EDITOR: Temporary Object List created!");
+			pNumEditEntry = &numEditEntry_temp;
+			___objEditEntry = (_OBJ_EDITENTRY*)&__objEditEntry_temp;
+		}
+
 
 		//Added the below lines because CameraModeEditor only reads P4's controller in the PC version.
 		//Also the text is tiny
@@ -1132,7 +1170,7 @@ void setEditor(task* tp)
 			}
 			else if (per[0]->press & Buttons_B) { // B (?)
 				//Go through objStatusEntry and set ssCondition.
-				for (OBJ_CONDITION* ocp_2 = &objStatusEntry[numStatusEntry - 1]; ocp_2 >= &objStatusEntry[0]; --ocp_2) {
+				for (OBJ_CONDITION* ocp_2 = &pObjStatusEntry[numStatusEntry - 1]; ocp_2 >= &pObjStatusEntry[0]; --ocp_2) {
 					ocp_2->ssCondition |= 0x8000;
 				}
 			}
@@ -1198,5 +1236,9 @@ void njPrintH_fixed(Sint32 loc, Sint32 val, Sint32 digit)
 	sprintf(dst, fmt, val);
 
 	njPrintC(loc, dst);
+}
+
+void sethasADWV() {
+	hasADWV = TRUE;
 }
 
