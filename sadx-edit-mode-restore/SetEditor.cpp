@@ -833,10 +833,10 @@ void setEditor(task* tp)
 		tp->dest = setEditor_dest;
 		break;
 	case 1: //Wait for input to enter editor. boolEditorEnabled added.
-		//Doesn't work in Chao Gardens, so disable it there.
-		if (ssStageNumber >= 39 && ssStageNumber <= 41)
-			break;
 
+		//Custom: If there is no object list (Eg. Chao Gardens) don't start.
+		if (!pObjItemTable || !pObjItemTable->ssCount)
+			break;
 
 		if (per[0]->on & Buttons_X && per[0]->press & Buttons_A && setEditor_SetDisplayFlag(1) && boolEditorEnabled) {
 			taskwk_p->mode = 3;
@@ -859,6 +859,13 @@ void setEditor(task* tp)
 
 		//Added so objects can be spawned in areas without SET Files, like Chao Race and Hedgehog Hammer when not Amy.
 		if (!___objEditEntry && !pNumEditEntry) {
+
+			//Reset the list bc I never checked to see if the game does
+			for (Uint32 i = 0; i < numEditEntry_temp; ++i) {
+				__objEditEntry_temp[i] = { NULL };
+			}
+			numEditEntry_temp = 0;
+
 			PrintDebug("\nSET EDITOR: Temporary Object List created!");
 			pNumEditEntry = &numEditEntry_temp;
 			___objEditEntry = (_OBJ_EDITENTRY*)&__objEditEntry_temp;
@@ -1168,8 +1175,11 @@ void setEditor(task* tp)
 					taskwk_p->mode = 5;
 				}
 			}
-			else if (per[0]->press & Buttons_B) { // B (?)
-				//Go through objStatusEntry and set ssCondition.
+			else if (per[0]->press & Buttons_B) { // B (Enable Objects)
+				//This gives every object the flag to enable spawning.
+				//It does nothing due to every object being created with this flag, but the mod has a config setting to stop that.
+
+				//Go through objStatusEntry and set ssCondition's enable spawning flag.
 				for (OBJ_CONDITION* ocp_2 = &pObjStatusEntry[numStatusEntry - 1]; ocp_2 >= &pObjStatusEntry[0]; --ocp_2) {
 					ocp_2->ssCondition |= 0x8000;
 				}
